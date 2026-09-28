@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "supabase/functions/keys-panel/**"
+      - "supabase/functions/keys/**"
       - ".github/workflows/deploy-keys-panel.yml"
   workflow_dispatch:
 
@@ -40,6 +41,13 @@ jobs:
             --project-ref "$SUPABASE_PROJECT_REF" \
             --no-verify-jwt
 
-      - name: Print endpoint
+      - name: Deploy keys
+        run: |
+          supabase functions deploy keys \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt
+
+      - name: Print endpoints
         run: |
           echo "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/keys-panel"
+          echo "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/keys"
