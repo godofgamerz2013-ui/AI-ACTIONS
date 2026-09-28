@@ -265,26 +265,34 @@ Deno.serve(async (req: Request) => {
   const action = url.searchParams.get("action");
   const accept = req.headers.get("accept") ?? "";
   const secFetchDest = (req.headers.get("sec-fetch-dest") ?? "").toLowerCase();
-  const isDocumentRequest = secFetchDest === "document" || (!secFetchDest && accept.includes("text/html"));
+  const isBrowserNavigation = secFetchDest === "document" || (!secFetchDest && accept.includes("text/html"));
 
-  if (url.searchParams.get("panel") === "1" || (!action && isDocumentRequest)) {
-    return new Response(PANEL, { headers: { ...CORS, "Content-Type": "text/html; charset=utf-8" } });
+  if (url.searchParams.get("panel") === "1" || (!action && isBrowserNavigation)) {
+    return new Response(PANEL, {
+      headers: { ...CORS, "Content-Type": "text/html; charset=utf-8" },
+    });
   }
 
   if (!action) {
-    const panelUrl = url.origin + url.pathname + "?panel=1";
-    const panelUrlJson = JSON.stringify(panelUrl);
-    const loader = "(()=>{const mount=()=>{if(document.getElementById(\"gogo-keys-panel-frame\"))return;const f=document.createElement(\"iframe\");f.id=\"gogo-keys-panel-frame\";f.src="+panelUrlJson+";f.title=\"GOGO AI License Control\";f.style.cssText=\"position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:#070a11\";document.documentElement.style.background=\"#070a11\";if(document.body)document.body.appendChild(f);else document.documentElement.appendChild(f)};if(document.body)mount();else document.addEventListener(\"DOMContentLoaded\",mount,{once:true})})()";
-    return new Response(loader, { headers: { ...CORS, "Content-Type": "application/javascript; charset=utf-8" } });
+    const loader = "document.open();document.write(" + JSON.stringify(PANEL) + ");document.close();";
+    return new Response(loader, {
+      headers: { ...CORS, "Content-Type": "application/javascript; charset=utf-8" },
+    });
   }
 
   if (action === "verify") {
-    try { return json(await verifyLicense(await req.json())); }
-    catch { return json(FAILURE); }
+    try {
+      return json(await verifyLicense(await req.json()));
+    } catch {
+      return json(FAILURE);
+    }
   }
 
   if (!adminOK(req)) return json({ error: "Unauthorized" }, 401);
 
-  try { return json(await adminAction(action, req)); }
-  catch (e) { return json({ error: e instanceof Error ? e.message : "Server error" }, 500); }
+  try {
+    return json(await adminAction(action, req));
+  } catch (e) {
+    return json({ error: e instanceof Error ? e.message : "Server error" }, 500);
+  }
 });
