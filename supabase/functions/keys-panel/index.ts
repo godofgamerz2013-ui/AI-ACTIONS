@@ -148,23 +148,10 @@ async function adminAction(action: string, req: Request) {
 
   if (!action) {
     const panelUrl = url.origin + url.pathname + "?panel=1";
-    const loader = (() => {
-      const panelUrlJson = JSON.stringify(panelUrl);
-      return `(() => {
-        if (document.getElementById("gogo-keys-panel-frame")) return;
-        const f = document.createElement("iframe");
-        f.id = "gogo-keys-panel-frame";
-        f.src = ${panelUrlJson};
-        f.title = "GOGO AI License Control";
-        f.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:#070a11";
-        document.documentElement.style.background = "#070a11";
-        document.body.style.margin = "0";
-        document.body.appendChild(f);
-      })()`;
-    })();
+    const panelUrlJson = JSON.stringify(panelUrl);
+    const loader = "(()=>{if(document.getElementById(\"gogo-keys-panel-frame\"))return;const f=document.createElement(\"iframe\");f.id=\"gogo-keys-panel-frame\";f.src="+panelUrlJson+";f.title=\"GOGO AI License Control\";f.style.cssText=\"position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:#070a11\";document.documentElement.style.background=\"#070a11\";document.body.style.margin=\"0\";document.body.appendChild(f)})()";
     return new Response(loader, { headers: { ...CORS, "Content-Type": "application/javascript; charset=utf-8" } });
   }
-
   if (action === "verify") {
     try { return json(await verifyLicense(await req.json())); }
     catch { return json(FAILURE); }
