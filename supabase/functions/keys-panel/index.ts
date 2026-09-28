@@ -274,7 +274,7 @@ Deno.serve(async (req: Request) => {
   if (!action) {
     const panelUrl = url.origin + url.pathname + "?panel=1";
     const panelUrlJson = JSON.stringify(panelUrl);
-    const loader = "(()=>{if(document.getElementById(\"gogo-keys-panel-frame\"))return;const f=document.createElement(\"iframe\");f.id=\"gogo-keys-panel-frame\";f.src="+panelUrlJson+";f.title=\"GOGO AI License Control\";f.style.cssText=\"position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:#070a11\";document.documentElement.style.background=\"#070a11\";document.body.style.margin=\"0\";document.body.appendChild(f)})()";
+    const loader = "(()=>{const mount=()=>{if(document.getElementById(\"gogo-keys-panel-frame\"))return;const f=document.createElement(\"iframe\");f.id=\"gogo-keys-panel-frame\";f.src="+panelUrlJson+";f.title=\"GOGO AI License Control\";f.style.cssText=\"position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;background:#070a11\";document.documentElement.style.background=\"#070a11\";if(document.body)document.body.appendChild(f);else document.documentElement.appendChild(f)};if(document.body)mount();else document.addEventListener(\"DOMContentLoaded\",mount,{once:true})})()";
     return new Response(loader, { headers: { ...CORS, "Content-Type": "application/javascript; charset=utf-8" } });
   }
 
