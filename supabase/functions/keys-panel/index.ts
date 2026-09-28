@@ -35,9 +35,20 @@ async function db() {
   return dbPromise;
 }
 
-function adminOK(req: Request) {
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function adminOK(req: Request) {
   const supplied = req.headers.get("x-admin-pass") ?? "";
-  return !!ADMIN_PASSWORD && supplied === ADMIN_PASSWORD;
+  if (!ADMIN_PASSWORD || !supplied) return false;
+  if (supplied === ADMIN_PASSWORD) return true;
+  const adminHash = await sha256Hex(ADMIN_PASSWORD);
+  return supplied === adminHash;
 }
 
 function clean(d: any) {
@@ -243,14 +254,17 @@ const PANEL = `<!doctype html><html><head><meta charset="utf-8"><meta name="view
 </main></div>
 <div class="modal" id="modal"><div class="dialog"><h2 id="mt">Edit license</h2><div class="sub" id="mk"></div><div class="grid"><div class="field"><label>Variant</label><select id="variant"><option value="elite">Elite</option></select></div><div class="field"><label>Expiry</label><input id="expiry" type="datetime-local"></div></div><div class="field"><label>Device ID</label><input id="device"></div><div class="field"><label>Remarks</label><input id="remarks" placeholder="Example: Given to Rahul"></div><div class="field"><label>Notes</label><textarea id="notes" placeholder="Payment, plan, date, customer details..."></textarea></div><div class="foot"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="save">Save to MongoDB</button></div></div></div>
 <script>
-(()=>{const API="https://rzhtesfikvykdnmrqwjs.supabase.co/functions/v1/keys",$=id=>document.getElementById(id);let pass="",items=[];
+(()=>{const API="https://rzhtesfikvykdnmrqwjs.supabase.co/functions/v1/keys",$=id=>document.getElementById(id);let pass=localStorage.getItem("gogo_admin_hash")||"",items=[];
+async function sha256Hex(v){const d=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v));return Array.from(new Uint8Array(d),b=>b.toString(16).padStart(2,"0")).join("")}
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 async function call(action,method="GET",body=null){const opt={method,headers:{"x-admin-pass":pass}};if(body!==null){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body)}const r=await fetch(API+"?action="+encodeURIComponent(action)+(action==="keys"?"&q="+encodeURIComponent($("q").value):""),opt);const d=await r.json();if(!r.ok)throw Error(d.error||"Request failed");return d}
 async function refresh(){const [s,k]=await Promise.all([call("stats"),call("keys")]);$("s0").textContent=s.total;$("s1").textContent=s.active;$("s2").textContent=s.available;$("s3").textContent=s.claimed;$("s4").textContent=s.expired;items=k.keys||[];draw()}
 function draw(){$("rows").innerHTML=items.length?items.map(k=>\`<tr><td><b>\${esc(k.key)}</b><div class="muted">\${esc(k.remarks)}</div></td><td><span class="badge \${k.active?"ok":"off"}">\${k.active?"ACTIVE":"DISABLED"}</span></td><td>\${esc(k.device_id||"Available")}</td><td>\${esc(k.variant)}</td><td>\${k.expires_at?esc(new Date(k.expires_at).toLocaleString()):"Never"}</td><td class="note">\${esc(k.notes)}</td><td><div class="actions"><button class="btn" data-a="copy" data-k="\${esc(k.key)}">Copy</button><button class="btn" data-a="edit" data-k="\${esc(k.key)}">Edit</button><button class="btn" data-a="toggle" data-k="\${esc(k.key)}">\${k.active?"Disable":"Enable"}</button><button class="btn" data-a="delete" data-k="\${esc(k.key)}">Delete</button></div></td></tr>\`).join(""):'<tr><td colspan="7" style="padding:40px;text-align:center" class="muted">No licenses found</td></tr>'}
 function openEditor(k){$("mt").textContent=k?"Edit license":"Add license";$("mk").textContent=k?k.key:"New license";$("modal").dataset.key=k?.key||"";$("variant").value=k?.variant||"elite";$("device").value=k?.device_id||"";$("remarks").value=k?.remarks||"";$("notes").value=k?.notes||"";$("expiry").value=k?.expires_at?new Date(k.expires_at).toISOString().slice(0,16):"";$("modal").classList.add("show")}
-$("loginBtn").onclick=async()=>{pass=$("pass").value;try{await call("stats");$("login").classList.add("hidden");$("app").classList.remove("hidden");await refresh()}catch{$("error").innerHTML='<span style="color:#ff8998;font-size:12px">Invalid administrator password.</span>'}};
-$("pass").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click()};$("q").oninput=()=>refresh().catch(()=>{});$("add").onclick=()=>openEditor(null);$("cancel").onclick=()=>$("modal").classList.remove("show");
+async function authenticate(value,isHash=false){const r=await fetch(API+"?action=auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(isHash?{password_hash:value}:{password:value})});const d=await r.json();if(!r.ok)throw Error(d.error||"Password failed.");return d}
+$("loginBtn").onclick=async()=>{const entered=$("pass").value;$("error").textContent="";$("loginBtn").disabled=true;$("loginBtn").textContent="Signing in...";if(!entered){$("error").innerHTML='<span style="color:#ff8998;font-size:12px">Enter the administrator password.</span>';$("loginBtn").disabled=false;$("loginBtn").textContent="Sign in";return}try{const hash=await sha256Hex(entered);await authenticate(entered,false);pass=hash;localStorage.setItem("gogo_admin_hash",hash);await refresh();$("login").classList.add("hidden");$("app").classList.remove("hidden")}catch(e){pass="";localStorage.removeItem("gogo_admin_hash");$("error").innerHTML='<span style="color:#ff8998;font-size:12px">❌ '+esc(e?.message||"Password failed.")+"</span>";}finally{$("loginBtn").disabled=false;$("loginBtn").textContent="Sign in"}};
+$("pass").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click()};
+if(pass){authenticate(pass,true).then(()=>refresh().then(()=>{$("login").classList.add("hidden");$("app").classList.remove("hidden")})).catch(()=>{pass="";localStorage.removeItem("gogo_admin_hash")})};$("q").oninput=()=>refresh().catch(()=>{});$("add").onclick=()=>openEditor(null);$("cancel").onclick=()=>$("modal").classList.remove("show");
 $("generate").onclick=async()=>{const n=Number(prompt("How many keys? (1–1000)","10")||0);if(n>0){await call("generate","POST",{count:Math.min(1000,n),variant:"elite"});await refresh()}};
 $("save").onclick=async()=>{let key=$("modal").dataset.key;if(!key)key=prompt("Enter key","MJ-ELITE-XXXX-XXXX");if(!key)return;await call($("modal").dataset.key?"update":"add","POST",{key,variant:$("variant").value,device_id:$("device").value.trim()||null,remarks:$("remarks").value,notes:$("notes").value,expires_at:$("expiry").value?new Date($("expiry").value).toISOString():null});$("modal").classList.remove("show");await refresh()};
 $("rows").onclick=async e=>{const b=e.target.closest("button");if(!b)return;const k=b.dataset.k,item=items.find(x=>x.key===k),a=b.dataset.a;if(a==="copy"){await navigator.clipboard.writeText(k);return}if(a==="edit"){openEditor(item);return}if(a==="toggle"){await call("toggle","POST",{key:k});await refresh();return}if(a==="delete"&&confirm("Delete "+k+" permanently?")){await call("delete","POST",{key:k});await refresh()}};
@@ -288,7 +302,26 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  if (!adminOK(req)) return json({ error: "Unauthorized" }, 401);
+  if (action === "auth") {
+    let supplied = req.headers.get("x-admin-pass") ?? "";
+    if (req.method === "POST") {
+      try {
+        const body = await req.json();
+        supplied = String(body?.password ?? body?.password_hash ?? supplied);
+      } catch {
+        // Keep header-based authentication as a fallback.
+      }
+    }
+
+    const valid =
+      !!ADMIN_PASSWORD &&
+      (supplied === ADMIN_PASSWORD || supplied === await sha256Hex(ADMIN_PASSWORD));
+
+    if (valid) return json({ ok: true });
+    return json({ error: "Incorrect administrator password." }, 401);
+  }
+
+  if (!(await adminOK(req))) return json({ error: "Unauthorized" }, 401);
 
   try {
     return json(await adminAction(action, req));
