@@ -1,0 +1,45 @@
+name: Deploy GOGO Keys Panel
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "supabase/functions/keys-panel/**"
+      - ".github/workflows/deploy-keys-panel.yml"
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+      MONGO_URI: ${{ secrets.MONGO_URI }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Configure Supabase secrets
+        run: |
+          supabase secrets set \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            MONGO_URI="$MONGO_URI" \
+            ADMIN_PASSWORD="$ADMIN_PASSWORD"
+
+      - name: Deploy keys-panel
+        run: |
+          supabase functions deploy keys-panel \
+            --project-ref "$SUPABASE_PROJECT_REF" \
+            --no-verify-jwt
+
+      - name: Print endpoint
+        run: |
+          echo "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/keys-panel"
