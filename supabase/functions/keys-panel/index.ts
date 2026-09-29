@@ -1,14 +1,14 @@
 import { MongoClient } from "npm:mongodb@6.19.0";
 
 const MONGO_URI = Deno.env.get("MONGO_URI") ?? "";
-const ADMIN_PASSWORD = Deno.env.get("ADMIN_PASSWORD") ?? "";
+const ADMIN_PASSWORD_HASH_ENV = Deno.env.get("ADMIN_PASSWORD_HASH") ?? "";
 
 const client = new MongoClient(MONGO_URI);
 let dbPromise: Promise<any> | null = null;
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "Content-Type, x-admin-pass",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Cache-Control": "no-store",
 };
@@ -43,12 +43,46 @@ async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
 }
 
+function randomToken() {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function getAdminPasswordHash() {
+  const database = await db();
+  const cfg = await database.collection("admin_config").findOne(
+    { _id: "key_panel" },
+    { projection: { password_hash: 1 } },
+  );
+  return String(cfg?.password_hash ?? ADMIN_PASSWORD_HASH_ENV ?? "").trim();
+}
+
+async function createAdminSession() {
+  const token = randomToken();
+  const tokenHash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000);
+  const database = await db();
+  await database.collection("admin_sessions").insertOne({
+    token_hash: tokenHash,
+    created_at: new Date(),
+    expires_at: expiresAt,
+  });
+  return { token, expiresAt };
+}
+
 async function adminOK(req: Request) {
-  const supplied = req.headers.get("x-admin-pass") ?? "";
-  if (!ADMIN_PASSWORD || !supplied) return false;
-  if (supplied === ADMIN_PASSWORD) return true;
-  const adminHash = await sha256Hex(ADMIN_PASSWORD);
-  return supplied === adminHash;
+  const authorization = req.headers.get("authorization") ?? "";
+  if (!authorization.toLowerCase().startsWith("bearer ")) return false;
+  const token = authorization.slice(7).trim();
+  if (!token) return false;
+
+  const database = await db();
+  const session = await database.collection("admin_sessions").findOne({
+    token_hash: await sha256Hex(token),
+    expires_at: { $gt: new Date() },
+  });
+  return !!session;
 }
 
 function clean(d: any) {
@@ -242,9 +276,9 @@ const PANEL = `<!doctype html><html><head><meta charset="utf-8"><meta name="view
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#070a11;color:#eef3ff;font-family:Inter,system-ui,sans-serif}body{min-height:100vh}
 .app{min-height:100vh;display:grid;grid-template-columns:240px 1fr;background:radial-gradient(circle at 80% 0,#203a6a55,transparent 35%),radial-gradient(circle at 5% 100%,#0d615344,transparent 32%),#070a11}
 .side{padding:26px 16px;background:#0b1019eb;border-right:1px solid #ffffff10}.brand{display:flex;gap:11px;align-items:center;padding:4px 9px 30px}.logo{width:39px;height:39px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(135deg,#6f80ff,#59dfc1);color:#071016;font-weight:900}.brand b{font-size:15px}.brand small{display:block;color:#78849b;margin-top:2px}.nav{display:grid;gap:6px}.nav button{border:0;background:transparent;color:#99a4b8;padding:12px 14px;border-radius:11px;text-align:left;cursor:pointer}.nav button.active,.nav button:hover{background:#ffffff09;color:#fff}
-.main{padding:29px 34px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.top h1{margin:0;font-size:29px}.sub{color:#7f8ba0;font-size:12px;margin-top:6px}.online{color:#76e8bf;font-size:12px}.online:before{content:"";display:inline-block;width:7px;height:7px;background:#63e0b4;border-radius:50%;margin-right:7px;box-shadow:0 0 13px #63e0b4}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:13px;margin-bottom:18px}.stat{padding:18px;border-radius:17px;background:#111725bc;border:1px solid #ffffff09}.stat span{display:block;color:#758199;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.stat strong{display:block;font-size:25px;margin-top:6px}.toolbar{display:flex;justify-content:space-between;gap:12px;margin:15px 0}.search{width:min(570px,100%)}input,select,textarea{font:inherit;background:#0b1019;color:#fff;border:1px solid #ffffff12;border-radius:11px;padding:12px 13px;outline:none;width:100%}.btn{border:1px solid #ffffff10;background:#151c29;color:#d9e1f1;border-radius:10px;padding:10px 13px;cursor:pointer}.btn:hover{background:#1b2434}.primary{border:0;background:linear-gradient(135deg,#6f81ff,#58dcbd);color:#071016;font-weight:850}.table{overflow:auto;background:#0d121db8;border:1px solid #ffffff09;border-radius:17px}.table table{width:100%;min-width:960px;border-collapse:collapse}.table th{padding:14px 15px;text-align:left;color:#727e94;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.table td{padding:14px 15px;border-top:1px solid #ffffff08;font-size:12px;vertical-align:top}.muted{color:#7a869b}.badge{padding:5px 8px;border-radius:999px;font-size:10px;font-weight:800}.ok{color:#7ce9c0;background:#45dfad19}.off{color:#ff99a7;background:#ff657a19}.note{max-width:260px;white-space:pre-wrap;color:#98a3b6}.actions{display:flex;gap:5px;flex-wrap:wrap}.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#000b;backdrop-filter:blur(8px);padding:20px}.modal.show{display:flex}.dialog{width:min(760px,100%);max-height:90vh;overflow:auto;background:#0d131e;border:1px solid #ffffff10;border-radius:21px;padding:24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{margin-top:13px}.field label{display:block;color:#8994a7;font-size:10px;text-transform:uppercase;margin-bottom:6px}.field textarea{min-height:125px;resize:vertical}.foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.login{position:fixed;inset:0;display:grid;place-items:center;background:#070a11;z-index:10}.loginbox{width:min(410px,92vw);padding:29px;border-radius:21px;background:#0d131e;border:1px solid #ffffff10}.loginbox p{color:#7f8ba0;font-size:12px}.hidden{display:none!important}@media(max-width:1000px){.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #ffffff10}.main{padding:22px}.toolbar{flex-direction:column}.grid{grid-template-columns:1fr}}
+.main{padding:29px 34px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px}.top h1{margin:0;font-size:29px}.sub{color:#7f8ba0;font-size:12px;margin-top:6px}.online{color:#76e8bf;font-size:12px}.online:before{content:"";display:inline-block;width:7px;height:7px;background:#63e0b4;border-radius:50%;margin-right:7px;box-shadow:0 0 13px #63e0b4}.stats{display:grid;grid-template-columns:repeat(5,1fr);gap:13px;margin-bottom:18px}.stat{padding:18px;border-radius:17px;background:#111725bc;border:1px solid #ffffff09}.stat span{display:block;color:#758199;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.stat strong{display:block;font-size:25px;margin-top:6px}.toolbar{display:flex;justify-content:space-between;gap:12px;margin:15px 0}.search{width:min(570px,100%)}input,select,textarea{font:inherit;background:#0b1019;color:#fff;border:1px solid #ffffff12;border-radius:11px;padding:12px 13px;outline:none;width:100%}.btn{border:1px solid #ffffff10;background:#151c29;color:#d9e1f1;border-radius:10px;padding:10px 13px;cursor:pointer}.btn:hover{background:#1b2434}.primary{border:0;background:linear-gradient(135deg,#6f81ff,#58dcbd);color:#071016;font-weight:850;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}.primary:disabled{cursor:wait}.table{overflow:auto;background:#0d121db8;border:1px solid #ffffff09;border-radius:17px}.table table{width:100%;min-width:960px;border-collapse:collapse}.table th{padding:14px 15px;text-align:left;color:#727e94;font-size:10px;text-transform:uppercase;letter-spacing:.08em}.table td{padding:14px 15px;border-top:1px solid #ffffff08;font-size:12px;vertical-align:top}.muted{color:#7a869b}.badge{padding:5px 8px;border-radius:999px;font-size:10px;font-weight:800}.ok{color:#7ce9c0;background:#45dfad19}.off{color:#ff99a7;background:#ff657a19}.note{max-width:260px;white-space:pre-wrap;color:#98a3b6}.actions{display:flex;gap:5px;flex-wrap:wrap}.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#000b;backdrop-filter:blur(8px);padding:20px}.modal.show{display:flex}.dialog{width:min(760px,100%);max-height:90vh;overflow:auto;background:#0d131e;border:1px solid #ffffff10;border-radius:21px;padding:24px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{margin-top:13px}.field label{display:block;color:#8994a7;font-size:10px;text-transform:uppercase;margin-bottom:6px}.field textarea{min-height:125px;resize:vertical}.foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.login{position:fixed;inset:0;display:grid;place-items:center;background:#070a11;z-index:10}.loginbox{width:min(410px,92vw);padding:29px;border-radius:21px;background:#0d131e;border:1px solid #ffffff10}.loginbox p{color:#7f8ba0;font-size:12px}.hidden{display:none!important}@media(max-width:1000px){.stats{grid-template-columns:repeat(2,1fr)}}@media(max-width:780px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #ffffff10}.main{padding:22px}.toolbar{flex-direction:column}.grid{grid-template-columns:1fr}}
 </style></head><body>
-<div class="login" id="login"><div class="loginbox"><div class="logo">G</div><h2>GOGO AI License Control</h2><p>MongoDB-backed administration. Nothing is stored as a local database.</p><input id="pass" type="password" placeholder="Admin password" autocomplete="off"><button class="btn primary" id="loginBtn" style="width:100%;margin-top:10px">Sign in</button><div id="error"></div></div></div>
+<div class="login" id="login"><form class="loginbox" id="loginForm" novalidate><div class="logo">G</div><h2>GOGO AI License Control</h2><p>Secure MongoDB session login</p><input id="pass" type="password" placeholder="Administrator password" autocomplete="current-password" required><button type="submit" class="btn primary" id="loginBtn" style="width:100%;margin-top:12px;display:block;pointer-events:auto;touch-action:manipulation">🔐 Connect &amp; Sign in</button><div id="loginStatus" style="margin-top:10px;color:#7f8ba0;font-size:11px;text-align:center" aria-live="polite">Backend ready</div><div id="error" style="margin-top:8px" aria-live="polite"></div></form></div>
 <div class="app hidden" id="app"><aside class="side"><div class="brand"><div class="logo">G</div><div><b>GOGO AI</b><small>License Control</small></div></div><div class="nav"><button class="active" id="keysNav">🔑 Licenses</button><button id="auditNav">◷ Audit log</button></div></aside>
 <main class="main"><div class="top"><div><h1 id="title">Licenses</h1><div class="sub">All persistent data is stored in MongoDB</div></div><div class="online">API ONLINE</div></div>
 <div class="stats"><div class="stat"><span>Total</span><strong id="s0">—</strong></div><div class="stat"><span>Active</span><strong id="s1">—</strong></div><div class="stat"><span>Available</span><strong id="s2">—</strong></div><div class="stat"><span>Claimed</span><strong id="s3">—</strong></div><div class="stat"><span>Expired</span><strong id="s4">—</strong></div></div>
@@ -254,23 +288,262 @@ const PANEL = `<!doctype html><html><head><meta charset="utf-8"><meta name="view
 </main></div>
 <div class="modal" id="modal"><div class="dialog"><h2 id="mt">Edit license</h2><div class="sub" id="mk"></div><div class="grid"><div class="field"><label>Variant</label><select id="variant"><option value="elite">Elite</option></select></div><div class="field"><label>Expiry</label><input id="expiry" type="datetime-local"></div></div><div class="field"><label>Device ID</label><input id="device"></div><div class="field"><label>Remarks</label><input id="remarks" placeholder="Example: Given to Rahul"></div><div class="field"><label>Notes</label><textarea id="notes" placeholder="Payment, plan, date, customer details..."></textarea></div><div class="foot"><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="save">Save to MongoDB</button></div></div></div>
 <script>
-(()=>{const API="https://rzhtesfikvykdnmrqwjs.supabase.co/functions/v1/keys",$=id=>document.getElementById(id);let pass=localStorage.getItem("gogo_admin_hash")||"",items=[];
-async function sha256Hex(v){const d=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v));return Array.from(new Uint8Array(d),b=>b.toString(16).padStart(2,"0")).join("")}
+(()=>{
+const API="https://rzhtesfikvykdnmrqwjs.supabase.co/functions/v1/keys-panel";
+const $=id=>document.getElementById(id);
+let session=sessionStorage.getItem("gogo_admin_session")||"";
+let items=[];
+let busy=false;
+
+async function sha256Hex(v){
+  const d=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(v));
+  return Array.from(new Uint8Array(d),b=>b.toString(16).padStart(2,"0")).join("");
+}
 const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-async function call(action,method="GET",body=null){const opt={method,headers:{"x-admin-pass":pass}};if(body!==null){opt.headers["Content-Type"]="application/json";opt.body=JSON.stringify(body)}const r=await fetch(API+"?action="+encodeURIComponent(action)+(action==="keys"?"&q="+encodeURIComponent($("q").value):""),opt);const d=await r.json();if(!r.ok)throw Error(d.error||"Request failed");return d}
-async function refresh(){const [s,k]=await Promise.all([call("stats"),call("keys")]);$("s0").textContent=s.total;$("s1").textContent=s.active;$("s2").textContent=s.available;$("s3").textContent=s.claimed;$("s4").textContent=s.expired;items=k.keys||[];draw()}
-function draw(){$("rows").innerHTML=items.length?items.map(k=>\`<tr><td><b>\${esc(k.key)}</b><div class="muted">\${esc(k.remarks)}</div></td><td><span class="badge \${k.active?"ok":"off"}">\${k.active?"ACTIVE":"DISABLED"}</span></td><td>\${esc(k.device_id||"Available")}</td><td>\${esc(k.variant)}</td><td>\${k.expires_at?esc(new Date(k.expires_at).toLocaleString()):"Never"}</td><td class="note">\${esc(k.notes)}</td><td><div class="actions"><button class="btn" data-a="copy" data-k="\${esc(k.key)}">Copy</button><button class="btn" data-a="edit" data-k="\${esc(k.key)}">Edit</button><button class="btn" data-a="toggle" data-k="\${esc(k.key)}">\${k.active?"Disable":"Enable"}</button><button class="btn" data-a="delete" data-k="\${esc(k.key)}">Delete</button></div></td></tr>\`).join(""):'<tr><td colspan="7" style="padding:40px;text-align:center" class="muted">No licenses found</td></tr>'}
-function openEditor(k){$("mt").textContent=k?"Edit license":"Add license";$("mk").textContent=k?k.key:"New license";$("modal").dataset.key=k?.key||"";$("variant").value=k?.variant||"elite";$("device").value=k?.device_id||"";$("remarks").value=k?.remarks||"";$("notes").value=k?.notes||"";$("expiry").value=k?.expires_at?new Date(k.expires_at).toISOString().slice(0,16):"";$("modal").classList.add("show")}
-async function authenticate(value,isHash=false){const r=await fetch(API+"?action=auth",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(isHash?{password_hash:value}:{password:value})});const d=await r.json();if(!r.ok)throw Error(d.error||"Password failed.");return d}
-$("loginBtn").onclick=async()=>{const entered=$("pass").value;$("error").textContent="";$("loginBtn").disabled=true;$("loginBtn").textContent="Signing in...";if(!entered){$("error").innerHTML='<span style="color:#ff8998;font-size:12px">Enter the administrator password.</span>';$("loginBtn").disabled=false;$("loginBtn").textContent="Sign in";return}try{const hash=await sha256Hex(entered);await authenticate(entered,false);pass=hash;localStorage.setItem("gogo_admin_hash",hash);await refresh();$("login").classList.add("hidden");$("app").classList.remove("hidden")}catch(e){pass="";localStorage.removeItem("gogo_admin_hash");$("error").innerHTML='<span style="color:#ff8998;font-size:12px">❌ '+esc(e?.message||"Password failed.")+"</span>";}finally{$("loginBtn").disabled=false;$("loginBtn").textContent="Sign in"}};
-$("pass").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click()};
-if(pass){authenticate(pass,true).then(()=>refresh().then(()=>{$("login").classList.add("hidden");$("app").classList.remove("hidden")})).catch(()=>{pass="";localStorage.removeItem("gogo_admin_hash")})};$("q").oninput=()=>refresh().catch(()=>{});$("add").onclick=()=>openEditor(null);$("cancel").onclick=()=>$("modal").classList.remove("show");
-$("generate").onclick=async()=>{const n=Number(prompt("How many keys? (1–1000)","10")||0);if(n>0){await call("generate","POST",{count:Math.min(1000,n),variant:"elite"});await refresh()}};
-$("save").onclick=async()=>{let key=$("modal").dataset.key;if(!key)key=prompt("Enter key","MJ-ELITE-XXXX-XXXX");if(!key)return;await call($("modal").dataset.key?"update":"add","POST",{key,variant:$("variant").value,device_id:$("device").value.trim()||null,remarks:$("remarks").value,notes:$("notes").value,expires_at:$("expiry").value?new Date($("expiry").value).toISOString():null});$("modal").classList.remove("show");await refresh()};
-$("rows").onclick=async e=>{const b=e.target.closest("button");if(!b)return;const k=b.dataset.k,item=items.find(x=>x.key===k),a=b.dataset.a;if(a==="copy"){await navigator.clipboard.writeText(k);return}if(a==="edit"){openEditor(item);return}if(a==="toggle"){await call("toggle","POST",{key:k});await refresh();return}if(a==="delete"&&confirm("Delete "+k+" permanently?")){await call("delete","POST",{key:k});await refresh()}};
-$("auditNav").onclick=async()=>{$("keys").classList.add("hidden");$("aud").classList.remove("hidden");$("auditNav").classList.add("active");$("keysNav").classList.remove("active");$("title").textContent="Audit log";const d=await call("audit");$("auditRows").innerHTML=(d.logs||[]).map(x=>\`<tr><td>\${esc(x.timestamp?new Date(x.timestamp).toLocaleString():"")}</td><td><b>\${esc(x.key||"—")}</b></td><td>\${esc(x.action)}</td><td>\${esc(x.device_id||"—")}</td><td>\${esc(x.details||"")}</td></tr>\`).join("")};
-$("keysNav").onclick=()=>{$("aud").classList.add("hidden");$("keys").classList.remove("hidden");$("auditNav").classList.remove("active");$("keysNav").classList.add("active");$("title").textContent="Licenses"};
-})();</script></body></html>`;
+
+function setLoginState(text,error){
+  const el=$("loginStatus");
+  if(el){el.textContent=text;el.style.color=error?"#ff8998":"#7f8ba0"}
+}
+function showLogin(message){
+  session="";
+  sessionStorage.removeItem("gogo_admin_session");
+  $("app").classList.add("hidden");
+  $("login").classList.remove("hidden");
+  if(message)$("error").innerHTML='<span style="color:#ff8998;font-size:12px">❌ '+esc(message)+"</span>";
+}
+
+async function api(action,method="GET",body=null){
+  const headers={};
+  if(session)headers.Authorization="Bearer "+session;
+  if(body!==null)headers["Content-Type"]="application/json";
+  const url=API+"?action="+encodeURIComponent(action)+(action==="keys"?"&q="+encodeURIComponent($("q").value):"");
+  const r=await fetch(url,{method,headers,body:body===null?undefined:JSON.stringify(body),cache:"no-store"});
+  let d={};
+  try{d=await r.json()}catch{throw Error("Invalid backend response.")}
+
+  if(r.status===401){
+    showLogin(d.error||"Session expired. Please sign in again.");
+    throw Error(d.error||"Session expired.");
+  }
+  if(!r.ok)throw Error(d.error||"Request failed.");
+  return d;
+}
+
+async function refresh(){
+  const data=await Promise.all([api("stats"),api("keys")]);
+  const s=data[0],k=data[1];
+  $("s0").textContent=s.total;
+  $("s1").textContent=s.active;
+  $("s2").textContent=s.available;
+  $("s3").textContent=s.claimed;
+  $("s4").textContent=s.expired;
+  items=k.keys||[];
+  draw();
+}
+
+function draw(){
+  const rows=$("rows");
+  if(!items.length){
+    rows.innerHTML='<tr><td colspan="7" style="padding:40px;text-align:center" class="muted">No licenses found</td></tr>';
+    return;
+  }
+  rows.innerHTML=items.map(k=>{
+    const key=esc(k.key);
+    const active=!!k.active;
+    return '<tr>'+
+      '<td><b>'+key+'</b><div class="muted">'+esc(k.remarks)+'</div></td>'+
+      '<td><span class="badge '+(active?"ok":"off")+'">'+(active?"ACTIVE":"DISABLED")+'</span></td>'+
+      '<td>'+esc(k.device_id||"Available")+'</td>'+
+      '<td>'+esc(k.variant)+'</td>'+
+      '<td>'+(k.expires_at?esc(new Date(k.expires_at).toLocaleString()):"Never")+'</td>'+
+      '<td class="note">'+esc(k.notes)+'</td>'+
+      '<td><div class="actions">'+
+        '<button type="button" class="btn" data-a="copy" data-k="'+key+'">Copy</button>'+
+        '<button type="button" class="btn" data-a="edit" data-k="'+key+'">Edit</button>'+
+        '<button type="button" class="btn" data-a="toggle" data-k="'+key+'">'+(active?"Disable":"Enable")+'</button>'+
+        '<button type="button" class="btn" data-a="delete" data-k="'+key+'">Delete</button>'+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+}
+
+function openEditor(k){
+  $("mt").textContent=k?"Edit license":"Add license";
+  $("mk").textContent=k?k.key:"New license";
+  $("modal").dataset.key=k?.key||"";
+  $("variant").value=k?.variant||"elite";
+  $("device").value=k?.device_id||"";
+  $("remarks").value=k?.remarks||"";
+  $("notes").value=k?.notes||"";
+  $("expiry").value=k?.expires_at?new Date(k.expires_at).toISOString().slice(0,16):"";
+  $("modal").classList.add("show");
+}
+
+// NEW LOGIN FLOW:
+// 1) Button is a real form submit.
+// 2) Password is SHA-256 hashed locally.
+// 3) Only the hash is posted to the backend.
+// 4) Backend checks MongoDB and returns a short-lived random session.
+// 5) Every admin operation uses Authorization: Bearer <session>.
+async function doLogin(e){
+  if(e)e.preventDefault();
+  if(busy)return false;
+
+  const entered=$("pass").value;
+  $("error").textContent="";
+
+  if(!entered.trim()){
+    setLoginState("Enter the administrator password.",true);
+    $("pass").focus();
+    return false;
+  }
+
+  busy=true;
+  $("loginBtn").disabled=true;
+  $("loginBtn").textContent="Connecting…";
+  setLoginState("Hashing password locally…");
+
+  try{
+    const passwordHash=await sha256Hex(entered);
+    setLoginState("Checking MongoDB…");
+
+    const r=await fetch(API+"?action=login",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({password_hash:passwordHash}),
+      cache:"no-store"
+    });
+
+    let d={};
+    try{d=await r.json()}catch{throw Error("Backend returned invalid JSON.")}
+
+    if(!r.ok||!d.session_token)throw Error(d.error||"Login failed.");
+
+    session=d.session_token;
+    sessionStorage.setItem("gogo_admin_session",session);
+    $("loginBtn").textContent="Loading licenses…";
+    setLoginState("Verified. Loading licenses…");
+
+    await refresh();
+
+    $("pass").value="";
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+  }catch(err){
+    showLogin(err?.message||"Login failed.");
+    setLoginState("Backend login failed.",true);
+  }finally{
+    busy=false;
+    $("loginBtn").disabled=false;
+    $("loginBtn").textContent="🔐 Connect & Sign in";
+  }
+  return false;
+}
+
+$("loginForm").addEventListener("submit",doLogin);
+$("loginBtn").addEventListener("click",doLogin);
+
+$("q").addEventListener("input",()=>{if(session)refresh().catch(()=>{})});
+$("add").addEventListener("click",()=>openEditor(null));
+$("cancel").addEventListener("click",()=>$("modal").classList.remove("show"));
+
+$("generate").addEventListener("click",async()=>{
+  if(busy)return;
+  const n=Number(prompt("How many keys? (1–1000)","10")||0);
+  if(n<=0)return;
+  busy=true;
+  try{
+    await api("generate","POST",{count:Math.min(1000,n),variant:"elite"});
+    await refresh();
+  }catch(e){alert(e.message)}
+  finally{busy=false}
+});
+
+$("save").addEventListener("click",async()=>{
+  if(busy)return;
+  let key=$("modal").dataset.key;
+  const isEdit=!!key;
+  if(!key)key=prompt("Enter key","MJ-ELITE-XXXX-XXXX");
+  if(!key)return;
+  busy=true;
+  try{
+    await api(isEdit?"update":"add","POST",{
+      key:key,
+      variant:$("variant").value,
+      device_id:$("device").value.trim()||null,
+      remarks:$("remarks").value,
+      notes:$("notes").value,
+      expires_at:$("expiry").value?new Date($("expiry").value).toISOString():null
+    });
+    $("modal").classList.remove("show");
+    await refresh();
+  }catch(e){alert(e.message)}
+  finally{busy=false}
+});
+
+$("rows").addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-a]");
+  if(!b||busy)return;
+  const key=b.dataset.k;
+  const item=items.find(x=>x.key===key);
+  const action=b.dataset.a;
+
+  if(action==="copy"){
+    try{await navigator.clipboard.writeText(key)}catch{alert(key)}
+    return;
+  }
+  if(action==="edit"){openEditor(item);return}
+
+  busy=true;
+  try{
+    if(action==="toggle"){
+      await api("toggle","POST",{key:key});
+      await refresh();
+    }else if(action==="delete"&&confirm("Delete "+key+" permanently?")){
+      await api("delete","POST",{key:key});
+      await refresh();
+    }
+  }catch(e){alert(e.message)}
+  finally{busy=false}
+});
+
+$("auditNav").addEventListener("click",async()=>{
+  if(!session)return;
+  $("keys").classList.add("hidden");
+  $("aud").classList.remove("hidden");
+  $("auditNav").classList.add("active");
+  $("keysNav").classList.remove("active");
+  $("title").textContent="Audit log";
+  try{
+    const d=await api("audit");
+    $("auditRows").innerHTML=(d.logs||[]).map(x=>
+      '<tr><td>'+esc(x.timestamp?new Date(x.timestamp).toLocaleString():"")+
+      '</td><td><b>'+esc(x.key||"—")+'</b></td><td>'+esc(x.action)+
+      '</td><td>'+esc(x.device_id||"—")+'</td><td>'+esc(x.details||"")+'</td></tr>'
+    ).join("");
+  }catch{}
+});
+
+$("keysNav").addEventListener("click",()=>{
+  $("aud").classList.add("hidden");
+  $("keys").classList.remove("hidden");
+  $("auditNav").classList.remove("active");
+  $("keysNav").classList.add("active");
+  $("title").textContent="Licenses";
+});
+
+if(session){
+  setLoginState("Restoring secure session…");
+  refresh().then(()=>{
+    $("login").classList.add("hidden");
+    $("app").classList.remove("hidden");
+  }).catch(()=>{
+    showLogin("Session expired. Please sign in again.");
+  });
+}
+})();
+</script></body></html>`;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -302,26 +575,55 @@ Deno.serve(async (req: Request) => {
     }
   }
 
-  if (action === "auth") {
-    let supplied = req.headers.get("x-admin-pass") ?? "";
-    if (req.method === "POST") {
-      try {
-        const body = await req.json();
-        supplied = String(body?.password ?? body?.password_hash ?? supplied);
-      } catch {
-        // Keep header-based authentication as a fallback.
+  if (action === "login") {
+    try {
+      const body = await req.json();
+      const passwordHash = String(body?.password_hash ?? "").trim();
+      const password = String(body?.password ?? "");
+      const expected = await getAdminPasswordHash();
+
+      const valid =
+        !!expected &&
+        (
+          (passwordHash !== "" && passwordHash === expected) ||
+          (password !== "" && (await sha256Hex(password)) === expected)
+        );
+
+      if (!valid) {
+        return json({ ok: false, error: "Incorrect administrator password." }, 401);
       }
+
+      const session = await createAdminSession();
+      return json({
+        ok: true,
+        session_token: session.token,
+        expires_at: session.expiresAt.toISOString(),
+      });
+    } catch (e) {
+      return json({
+        ok: false,
+        error: e instanceof Error ? e.message : "Login failed.",
+      }, 500);
     }
-
-    const valid =
-      !!ADMIN_PASSWORD &&
-      (supplied === ADMIN_PASSWORD || supplied === await sha256Hex(ADMIN_PASSWORD));
-
-    if (valid) return json({ ok: true });
-    return json({ error: "Incorrect administrator password." }, 401);
   }
 
-  if (!(await adminOK(req))) return json({ error: "Unauthorized" }, 401);
+  if (action === "logout") {
+    const authorization = req.headers.get("authorization") ?? "";
+    if (authorization.toLowerCase().startsWith("bearer ")) {
+      const token = authorization.slice(7).trim();
+      if (token) {
+        const database = await db();
+        await database.collection("admin_sessions").deleteOne({
+          token_hash: await sha256Hex(token),
+        });
+      }
+    }
+    return json({ ok: true });
+  }
+
+  if (!(await adminOK(req))) {
+    return json({ error: "Session expired. Please sign in again." }, 401);
+  }
 
   try {
     return json(await adminAction(action, req));
